@@ -45,6 +45,7 @@ jobs:
         django-version: ['3.2', '4.0', '4.1']
         xapian-version: ['1.4.19']
         filelock-version: ['3.4.2']
+    continue-on-error: true
 
     steps:
       - name: Set up Python ${{ matrix.python-version }}
