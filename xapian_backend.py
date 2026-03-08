@@ -96,61 +96,62 @@ def filelocked(func):
     return wrapper
 
 
-def _find_field_dict(backend, field_name):
-    for field_dict in backend.schema:
-        if field_dict['field_name'] == field_name:
-            return field_dict
-    return None
-
-
 class InvalidIndexError(HaystackError):
     """Raised when an index can not be opened."""
     pass
 
 
-class XHRangeProcessor(xapian.RangeProcessor):
+class XHValueRangeProcessor(xapian.ValueRangeProcessor):
     """
     A Processor to construct ranges of values
     """
     def __init__(self, backend):
         self.backend = backend
-        xapian.RangeProcessor.__init__(self)
+        xapian.ValueRangeProcessor.__init__(self)
 
     def __call__(self, begin, end):
         """
-        Construct a value range xapian.Query.
+        Construct a tuple for value range processing.
         `begin` -- a string in the format '<field_name>:[low_range]'
         If 'low_range' is omitted, assume the smallest possible value.
-        `end` -- a string in the the format '[high_range|*]'. If omitted or
-        '*', assume no upper bound.
-        Return a value range xapian.Query
+        `end` -- a string in the the format '[high_range|*]'. If '*', assume
+        the highest possible value.
+        Return a tuple of three strings: (column, low, high)
         """
         colon = begin.find(':')
         field_name = begin[:colon]
-        begin = begin[colon + 1:]
-        field_dict = _find_field_dict(self.backend, field_name)
-        if field_dict is not None:
-            field_type = field_dict['type']
+        begin = begin[colon + 1:len(begin)]
+        for field_dict in self.backend.schema:
+            if field_dict['field_name'] == field_name:
+                field_type = field_dict['type']
 
-            if end == '*':
-                end = ''
+                if not begin:
+                    if field_type == 'text':
+                        begin = 'a'  # TODO: A better way of getting a min text value?
+                    elif field_type == 'integer':
+                        begin = -sys.maxsize - 1
+                    elif field_type == 'float':
+                        begin = float('-inf')
+                    elif field_type in ['date', 'datetime']:
+                        begin = '00010101000000'
+                elif end == '*':
+                    if field_type == 'text':
+                        end = 'z' * 100  # TODO: A better way of getting a max text value?
+                    elif field_type == 'integer':
+                        end = sys.maxsize
+                    elif field_type == 'float':
+                        end = float('inf')
+                    elif field_type in ['date', 'datetime']:
+                        end = '99990101000000'
 
-            if field_type == 'float':
-                if begin:
+                if field_type == 'float':
                     begin = _term_to_xapian_value(float(begin), field_type)
-                if end:
                     end = _term_to_xapian_value(float(end), field_type)
-            elif field_type == 'integer':
-                if begin:
+                elif field_type == 'integer':
                     begin = _term_to_xapian_value(int(begin), field_type)
-                if end:
                     end = _term_to_xapian_value(int(end), field_type)
+                return field_dict['column'], str(begin), str(end)
 
-            slot = field_dict['column']
-            if not end:
-                return xapian.Query(slot, xapian.Query.OP_VALUE_GE, begin)
-            return xapian.Query(slot, xapian.Query.OP_VALUE_RANGE, begin, end)
-        return xapian.Query(xapian.Query.OP_INVALID)
 
 class XHExpandDecider(xapian.ExpandDecider):
     def __call__(self, term):
@@ -848,7 +849,8 @@ class XapianSearchBackend(BaseSearchBackend):
                 TERM_PREFIXES['field'] + field_dict['field_name'].upper()
             )
 
-        qp.add_rangeprocessor(XHRangeProcessor(self))
+        vrp = XHValueRangeProcessor(self)
+        qp.add_valuerangeprocessor(vrp)
 
         return qp.parse_query(query_string, self.flags)
 
@@ -1390,7 +1392,7 @@ class XapianSearchQuery(BaseSearchQuery):
         """
         Returns a match all query.
         """
-        return xapian.Query.MatchAll
+        return xapian.Query('')
 
     def _filter_contains(self, term, field_name, field_type, is_not):
         """
@@ -1547,61 +1549,43 @@ class XapianSearchQuery(BaseSearchQuery):
         Private method that returns a xapian.Query that searches for any term
         that is greater than `term` in a specified `field`.
         """
-        field_dict = _find_field_dict(self.backend, field_name)
-        if field_dict is None:
-            query = xapian.Query.MatchNothing
-        else:
-            query = xapian.Query(xapian.Query.OP_VALUE_GE,
-                                 field_dict['column'],
-                                 _term_to_xapian_value(term, field_type)
-                                 )
+        vrp = XHValueRangeProcessor(self.backend)
+        pos, begin, end = vrp('%s:%s' % (field_name, _term_to_xapian_value(term, field_type)), '*')
         if is_not:
             return xapian.Query(xapian.Query.OP_AND_NOT,
                                 self._all_query(),
-                                query
+                                xapian.Query(xapian.Query.OP_VALUE_RANGE, pos, begin, end)
                                 )
-        return query
+        return xapian.Query(xapian.Query.OP_VALUE_RANGE, pos, begin, end)
 
     def _filter_lte(self, term, field_name, field_type, is_not):
         """
         Private method that returns a xapian.Query that searches for any term
         that is less than `term` in a specified `field`.
         """
-        field_dict = _find_field_dict(self.backend, field_name)
-        if field_dict is None:
-            query = xapian.Query.MatchNothing
-        else:
-            query = xapian.Query(xapian.Query.OP_VALUE_LE,
-                                 field_dict['column'],
-                                 _term_to_xapian_value(term, field_type)
-                                 )
+        vrp = XHValueRangeProcessor(self.backend)
+        pos, begin, end = vrp('%s:' % field_name, '%s' % _term_to_xapian_value(term, field_type))
         if is_not:
             return xapian.Query(xapian.Query.OP_AND_NOT,
                                 self._all_query(),
-                                query
+                                xapian.Query(xapian.Query.OP_VALUE_RANGE, pos, begin, end)
                                 )
-        return query
+        return xapian.Query(xapian.Query.OP_VALUE_RANGE, pos, begin, end)
 
     def _filter_range(self, term, field_name, field_type, is_not):
         """
         Private method that returns a xapian.Query that searches for any term
         that is between the values from the `term` list.
         """
-        field_dict = _find_field_dict(self.backend, field_name)
-        if field_dict is None:
-            query = xapian.Query.MatchNothing
-        else:
-            query = xapian.Query(xapian.Query.OP_VALUE_RANGE,
-                                 field_dict['column'],
-                                 _term_to_xapian_value(term[0], field_type),
-                                 _term_to_xapian_value(term[1], field_type)
-                                 )
+        vrp = XHValueRangeProcessor(self.backend)
+        pos, begin, end = vrp('%s:%s' % (field_name, _term_to_xapian_value(term[0], field_type)),
+                              '%s' % _term_to_xapian_value(term[1], field_type))
         if is_not:
             return xapian.Query(xapian.Query.OP_AND_NOT,
                                 self._all_query(),
-                                query
+                                xapian.Query(xapian.Query.OP_VALUE_RANGE, pos, begin, end)
                                 )
-        return query
+        return xapian.Query(xapian.Query.OP_VALUE_RANGE, pos, begin, end)
 
 
 def _term_to_xapian_value(term, field_type):
