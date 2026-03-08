@@ -11,7 +11,7 @@ jobs:
     strategy:
       matrix:
         python-version: ['3.13']
-        xapian-version: ['1.4.19']
+        xapian-version: ['1.4.31']
 
     steps:
       - name: Set up Python ${{ matrix.python-version }}
@@ -43,7 +43,7 @@ jobs:
       matrix:
         python-version: ['3.13']
         django-version: ['3.2', '4.0', '4.1']
-        xapian-version: ['1.4.19']
+        xapian-version: ['1.4.31']
         filelock-version: ['3.4.2']
 
     steps:
