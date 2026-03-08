@@ -1,7 +1,6 @@
 from decimal import Decimal
 import datetime
 import inspect
-import sys
 import xapian
 import subprocess
 import os
@@ -640,14 +639,33 @@ class BackendFeaturesTestCase(HaystackBackendTestCase, TestCase):
                                  ])
         self.assertExpectedQuery(self.backend.parse_query('number:..10'),
                                  [
-                                     '0 * VALUE_RANGE 11 %012d 000000000010' % (-sys.maxsize - 1),
-                                     'VALUE_RANGE 11 %012d 000000000010' % (-sys.maxsize - 1),
+                                     '0 * VALUE_LE 11 000000000010',
+                                     'VALUE_LE 11 000000000010',
                                  ])
         self.assertExpectedQuery(self.backend.parse_query('number:10..*'),
                                  [
-                                     '0 * VALUE_RANGE 11 000000000010 %012d' % sys.maxsize,
-                                     'VALUE_RANGE 11 000000000010 %012d' % sys.maxsize,
+                                     '0 * VALUE_GE 11 000000000010',
+                                     'VALUE_GE 11 000000000010',
                                  ])
+        # Regression tests for #236.
+        try:
+            query = self.backend.parse_query('..a')
+            self.fail('Expected xapian.QueryParserError but query parsed as: %s' %
+                      str(query))
+        except xapian.QueryParserError:
+            pass
+        try:
+            query = self.backend.parse_query('a..')
+            self.fail('Expected xapian.QueryParserError but query parsed as: %s' %
+                      str(query))
+        except xapian.QueryParserError:
+            pass
+        try:
+            query = self.backend.parse_query('...')
+            self.fail('Expected xapian.QueryParserError but query parsed as: %s' %
+                      str(query))
+        except xapian.QueryParserError:
+            pass
 
     def test_order_by_django_id(self):
         """
