@@ -607,20 +607,16 @@ class BackendFeaturesTestCase(HaystackBackendTestCase, TestCase):
 
         self.assertExpectedQuery(self.backend.parse_query('name:david'), 'ZXNAMEdavid@1')
 
-        if xapian.minor_version() >= 2:
-            # todo: why `SYNONYM WILDCARD OR XNAMEda`?
-            self.assertExpectedQuery(
-                self.backend.parse_query('name:da*'),
-                [
-                    '(SYNONYM WILDCARD OR XNAMEda)',
-                    'WILDCARD SYNONYM XNAMEda',
-                ])
-        else:
-            self.assertEqual(str(self.backend.parse_query('name:da*')),
-                             'Xapian::Query(('
-                             'XNAMEdavid1:(pos=1) OR '
-                             'XNAMEdavid2:(pos=1) OR '
-                             'XNAMEdavid3:(pos=1)))')
+        self.assertExpectedQuery(
+            self.backend.parse_query('name:da*'),
+            [
+                # Xapian < 1.4.8 (OP_SYNONYM with a single subquery which is
+                # OP_WILDCARD expanded using OP_OR).
+                '(SYNONYM WILDCARD OR XNAMEda)',
+                # Xapian >= 1.4.8 (OP_WILDCARD expanded using OP_SYNONYM -
+                # exactly equivalent semantically).
+                'WILDCARD SYNONYM XNAMEda',
+            ])
 
     def test_parse_query_range(self):
         self.assertExpectedQuery(self.backend.parse_query('name:david1..david2'),
